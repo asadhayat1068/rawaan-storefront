@@ -3,6 +3,7 @@
 namespace Fleetbase\Storefront\Listeners;
 
 use Fleetbase\FleetOps\Events\OrderDriverAssigned;
+use Fleetbase\FleetOps\Models\Contact;
 use Fleetbase\FleetOps\Models\Order;
 use Fleetbase\Storefront\Notifications\StorefrontOrderDriverAssigned;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -29,10 +30,11 @@ class HandleOrderDriverAssigned implements ShouldQueue
             return;
         }
 
-        // if storefront order notify customer driver has been addigned
+        // if storefront order notify customer driver has been assigned
         if ($order->hasMeta('storefront_id')) {
-            $order->load(['customer']);
-            $order->customer->notify(new StorefrontOrderDriverAssigned($order));
+            $customer = Contact::withoutGlobalScopes()->find($order->customer_uuid);
+            $customer->notify(new StorefrontOrderDriverAssigned($order));
         }
     }
 }
+

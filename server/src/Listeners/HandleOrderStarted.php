@@ -3,10 +3,14 @@
 namespace Fleetbase\Storefront\Listeners;
 
 use Fleetbase\FleetOps\Events\OrderStarted;
+use Fleetbase\FleetOps\Models\Contact;
 use Fleetbase\Storefront\Notifications\StorefrontOrderEnroute;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Queue\InteractsWithQueue;
 
-class HandleOrderStarted
+class HandleOrderStarted implements ShouldQueue
 {
+    use InteractsWithQueue;
     /**
      * Handle the event.
      *
@@ -21,8 +25,9 @@ class HandleOrderStarted
 
         // if storefront order / notify customer driver has started and is en-route
         if ($order->hasMeta('storefront_id')) {
-            $order->load(['customer']);
-            $order->customer->notify(new StorefrontOrderEnroute($order));
+            $customer = Contact::withoutGlobalScopes()->find($order->customer_uuid);
+            $customer->notify(new StorefrontOrderEnroute($order));
         }
     }
 }
+

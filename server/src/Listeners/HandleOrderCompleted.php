@@ -3,6 +3,7 @@
 namespace Fleetbase\Storefront\Listeners;
 
 use Fleetbase\FleetOps\Events\OrderCompleted;
+use Fleetbase\FleetOps\Models\Contact;
 use Fleetbase\Storefront\Notifications\StorefrontOrderCompleted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
@@ -23,10 +24,11 @@ class HandleOrderCompleted implements ShouldQueue
         /** @var \Fleetbase\FleetOps\Models\Order $order */
         $order = $event->getModelRecord();
 
-        // if storefront order notify customer driver has been addigned
+        // if storefront order notify customer order has been completed
         if ($order->hasMeta('storefront_id')) {
-            $order->load(['customer']);
-            $order->customer->notify(new StorefrontOrderCompleted($order));
+            $customer = Contact::withoutGlobalScopes()->find($order->customer_uuid);
+            $customer->notify(new StorefrontOrderCompleted($order));
         }
     }
 }
+

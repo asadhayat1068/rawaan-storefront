@@ -3,6 +3,7 @@
 namespace Fleetbase\Storefront\Listeners;
 
 use Fleetbase\FleetOps\Events\OrderDispatched;
+use Fleetbase\FleetOps\Models\Contact;
 use Fleetbase\Storefront\Notifications\StorefrontOrderReadyForPickup;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
@@ -23,13 +24,11 @@ class HandleOrderDispatched implements ShouldQueue
         /** @var \Fleetbase\FleetOps\Models\Order $order */
         $order = $event->getModelRecord();
 
-        // notufy customer order is ready for pickup
+        // notify customer order is ready for pickup
         if ($order->isMeta('is_pickup')) {
-            $order->load(['customer']);
-
-            if ($order->customer) {
-                $order->customer->notify(new StorefrontOrderReadyForPickup($order));
-            }
+            $customer = Contact::withoutGlobalScopes()->find($order->customer_uuid);
+            $customer->notify(new StorefrontOrderReadyForPickup($order));
         }
     }
 }
+

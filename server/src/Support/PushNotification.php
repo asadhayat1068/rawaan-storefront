@@ -39,7 +39,7 @@ class PushNotification
     public static function createFcmMessage(Order $order, string $title, string $body, string $status, $notifiable = null): ?FcmMessage
     {
         $storefront          = static::getStorefrontFromOrder($order);
-        $notificationChannel = static::getNotificationChannel('apn', $storefront, $order);
+        $notificationChannel = static::getNotificationChannel('fcm', $storefront, $order);
         if (!$notificationChannel) {
             return null;
         }

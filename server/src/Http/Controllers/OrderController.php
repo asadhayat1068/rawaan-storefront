@@ -177,7 +177,10 @@ class OrderController extends FleetbaseOrderController
         Storefront::patchOrderConfig($order);
 
         // update activity to completed
-        $order->updateStatus('completed');
+        //$order->updateStatus('completed');
+	
+	// complete the order and fire OrderCompleted event
+        $order->complete();
 
         return response()->json([
             'status' => 'ok',
