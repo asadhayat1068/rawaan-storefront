@@ -113,6 +113,8 @@ Route::prefix(config('storefront.api.routing.prefix', 'storefront'))->namespace(
                     $router->post('verify-code', 'CustomerController@verifyCode');
                     $router->post('login', 'CustomerController@login');
                     $router->post('request-creation-code', 'CustomerController@requestCustomerCreationCode');
+                    $router->post('reverse-otp/start', 'CustomerController@startReverseOtp');
+                    $router->post('reverse-otp/claim', 'CustomerController@claimReverseOtp');
                     $router->post('stripe-ephemeral-key', 'CustomerController@getStripeEphemeralKey');
                     $router->post('stripe-setup-intent', 'CustomerController@getStripeSetupIntent');
                     $router->post('account-closure', 'CustomerController@startAccountClosure');

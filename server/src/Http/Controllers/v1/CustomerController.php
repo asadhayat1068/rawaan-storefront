@@ -4,6 +4,7 @@ namespace Fleetbase\Storefront\Http\Controllers\v1;
 
 use Fleetbase\Auth\AppleVerifier;
 use Fleetbase\Auth\GoogleVerifier;
+use Fleetbase\Exceptions\ReverseOtpException;
 use Fleetbase\FleetOps\Exceptions\UserAlreadyExistsException;
 use Fleetbase\FleetOps\Http\Requests\UpdateContactRequest;
 use Fleetbase\FleetOps\Http\Resources\v1\DeletedResource;
@@ -17,10 +18,13 @@ use Fleetbase\Models\File;
 use Fleetbase\Models\User;
 use Fleetbase\Models\UserDevice;
 use Fleetbase\Models\VerificationCode;
+use Fleetbase\Storefront\Http\Requests\ClaimReverseOtpRequest;
 use Fleetbase\Storefront\Http\Requests\CreateCustomerRequest;
+use Fleetbase\Storefront\Http\Requests\StartReverseOtpRequest;
 use Fleetbase\Storefront\Http\Requests\VerifyCreateCustomerRequest;
 use Fleetbase\Storefront\Http\Resources\Customer;
 use Fleetbase\Storefront\Support\Storefront;
+use Fleetbase\Support\ReverseOtp;
 use Fleetbase\Support\Utils;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
@@ -167,10 +171,7 @@ class CustomerController extends Controller
     {
         // get the verification token
         $code     = $request->input('code');
-        $about    = Storefront::about(['company_uuid']);
-        $input    = $request->only(['name', 'type', 'title', 'email', 'phone', 'meta']);
         $identity = $request->input('identity');
-        $user     = null;
 
         if (!Utils::isEmail($identity)) {
             $identity = static::phone($identity);
@@ -181,6 +182,20 @@ class CustomerController extends Controller
         if (!$verificationCode) {
             return response()->apiError('Invalid verification code provided!');
         }
+
+        return $this->createCustomerForIdentity($identity, $request);
+    }
+
+    /**
+     * Creates a Storefront Customer for an identity (email or phone) that has been verified.
+     *
+     * @return \Fleetbase\Storefront\Http\Resources\Customer|\Illuminate\Http\JsonResponse
+     */
+    protected function createCustomerForIdentity(string $identity, Request $request)
+    {
+        $about = Storefront::about(['company_uuid']);
+        $input = $request->only(['name', 'type', 'title', 'email', 'phone', 'meta']);
+        $user  = null;
 
         // check for existing user to attach contact to
         if (Utils::isEmail($identity)) {
@@ -717,7 +732,14 @@ class CustomerController extends Controller
         $attrs    = $request->input(['name', 'phone', 'email']);
 
         if ($for === 'storefront_create_customer') {
-            return $this->create($request);
+            $request->validate((new CreateCustomerRequest())->rules());
+
+            $verificationCode = VerificationCode::where(['code' => $code, 'for' => $for, 'meta->identity' => $identity])->exists();
+            if (!$verificationCode) {
+                return response()->apiError('Invalid verification code provided!');
+            }
+
+            return $this->createCustomerForIdentity($identity, $request);
         }
 
         // check if user exists
@@ -732,6 +754,87 @@ class CustomerController extends Controller
         if (!$verificationCode && $code !== config('storefront.storefront_app.bypass_verification_code')) {
             return response()->apiError('Invalid verification code!');
         }
+
+        return $this->issueCustomerSession($user, $attrs);
+    }
+
+    /**
+     * Starts a reverse OTP challenge, where the customer verifies their phone number by
+     * sending the returned code by SMS to the gateway number.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function startReverseOtp(StartReverseOtpRequest $request)
+    {
+        $mode    = $request->input('mode', 'login');
+        $phone   = static::phone();
+        $about   = Storefront::about(['company_uuid']);
+        $subject = null;
+
+        if ($mode === 'login') {
+            $subject = User::where('phone', $phone)->whereNull('deleted_at')->withoutGlobalScopes()->first();
+            if (!$subject) {
+                return response()->apiError('No customer with this phone # found.', 400, ['errors' => ['No customer with this phone # found.']]);
+            }
+        } elseif (Contact::where(['company_uuid' => $about->company_uuid, 'phone' => $phone])->whereNull('deleted_at')->exists()) {
+            return response()->apiError('An account with this phone # already exists.', 400, ['errors' => ['An account with this phone # already exists.']]);
+        }
+
+        try {
+            $challenge = ReverseOtp::start($phone, 'storefront_' . $mode, $subject, ['storefront' => $about->public_id]);
+        } catch (ReverseOtpException $e) {
+            return response()->apiError($e->getMessage(), $e->getStatusCode(), ['errors' => [$e->getMessage()]]);
+        }
+
+        return response()->json($challenge);
+    }
+
+    /**
+     * Claims a verified reverse OTP challenge, signing in or creating the customer.
+     *
+     * Responds 202 with a pending status while the SMS has not been received yet.
+     *
+     * @return \Fleetbase\Storefront\Http\Resources\Customer|\Illuminate\Http\JsonResponse
+     */
+    public function claimReverseOtp(ClaimReverseOtpRequest $request)
+    {
+        $mode = $request->input('mode', 'login');
+
+        try {
+            $challenge = ReverseOtp::claim($request->input('challenge_id'), $request->input('secret'), 'storefront_' . $mode);
+        } catch (ReverseOtpException $e) {
+            return response()->apiError($e->getMessage(), $e->getStatusCode(), ['errors' => [$e->getMessage()]]);
+        }
+
+        if (!$challenge) {
+            return response()->json(['status' => ReverseOtp::STATUS_PENDING], 202);
+        }
+
+        $identity = ReverseOtp::identity($challenge);
+
+        if ($mode === 'signup') {
+            // The customer is created with the phone number that was verified, never one from the request
+            $request->merge(['phone' => $identity]);
+
+            return $this->createCustomerForIdentity($identity, $request);
+        }
+
+        $user = User::where('phone', $identity)->whereNull('deleted_at')->withoutGlobalScopes()->first();
+        if (!$user) {
+            return response()->apiError('Unable to verify customer.', 400, ['errors' => ['Unable to verify customer.']]);
+        }
+
+        return $this->issueCustomerSession($user, $request->only(['name', 'email']));
+    }
+
+    /**
+     * Gets or creates the customer contact for a verified user and issues an auth token.
+     *
+     * @return \Fleetbase\Storefront\Http\Resources\Customer|\Illuminate\Http\JsonResponse
+     */
+    protected function issueCustomerSession(User $user, ?array $attrs = [])
+    {
+        $attrs = $attrs ?? [];
 
         // get the storefront or network logging in for
         $about = Storefront::about(['company_uuid']);
